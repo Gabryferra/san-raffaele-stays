@@ -618,11 +618,19 @@ export async function getStayRules(): Promise<MinStayRule[]> {
       .select('*')
       .order('priority', { ascending: false });
     if (error) throw dbError('Lettura regole soggiorno', error);
-    return (data as MinStayRule[]).map(normalizeRule);
+    const rules = (data as MinStayRule[]).map(normalizeRule);
+    if (!rules.some((r) => r.rule_type === 'discount')) {
+      const defaultDiscounts = INITIAL_MIN_STAY_RULES.filter((r) => r.rule_type === 'discount').map(normalizeRule);
+      return [...rules, ...defaultDiscounts];
+    }
+    return rules;
   }
-  return getLocal<MinStayRule[]>(LS_MIN_STAY, INITIAL_MIN_STAY_RULES)
-    .map(normalizeRule)
-    .sort((a, b) => b.priority - a.priority);
+  const local = getLocal<MinStayRule[]>(LS_MIN_STAY, INITIAL_MIN_STAY_RULES).map(normalizeRule);
+  if (!local.some((r) => r.rule_type === 'discount')) {
+    const defaultDiscounts = INITIAL_MIN_STAY_RULES.filter((r) => r.rule_type === 'discount').map(normalizeRule);
+    local.push(...defaultDiscounts);
+  }
+  return local.sort((a, b) => b.priority - a.priority);
 }
 
 export async function createStayRule(rule: StayRuleInput): Promise<MinStayRule> {
