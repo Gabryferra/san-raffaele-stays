@@ -22,7 +22,7 @@ import {
   FinanceRecurring,
   FinanceScope,
 } from '@/types/finance';
-import { monthlyAverage, occurrenceDates, todayIso, addMonths, monthKey, monthEnd } from '@/lib/finance-calc';
+import { invoicedVatAmount, monthlyAverage, occurrenceDates, todayIso, addMonths, monthKey, monthEnd } from '@/lib/finance-calc';
 import {
   createCategory,
   deleteCategory,
@@ -163,6 +163,7 @@ export const MovementsTable: React.FC<{
                   m.scope === 'apartment' && m.direction === 'income'
                     ? Number(m.amount) - Math.min(Number(m.invoiced_amount ?? 0), Number(m.amount))
                     : 0;
+                const vatAmount = invoicedVatAmount(m);
                 return (
                   <tr key={m.id} className={`hover:bg-slate-50/80 ${m.status === 'planned' ? 'opacity-70' : ''}`}>
                     <td data-label="Data" className="py-2.5 px-4 font-semibold text-slate-800 whitespace-nowrap">
@@ -178,6 +179,9 @@ export const MovementsTable: React.FC<{
                           </Pill>
                         )}
                         {m.status === 'planned' && <Pill className="bg-amber-50 text-amber-700">Previsto</Pill>}
+                        {vatAmount > 0 && (
+                          <Pill className="bg-amber-100/80 text-amber-900">IVA 20%: −{eur2.format(vatAmount)}</Pill>
+                        )}
                         {toInvoice > 0 && <Pill className="bg-orange-50 text-orange-700">Diretto {eur2.format(toInvoice)}</Pill>}
                         {m.interest_amount != null && (
                           <Pill className="bg-slate-100 text-slate-600">Interessi {eur2.format(Number(m.interest_amount))}</Pill>

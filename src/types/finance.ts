@@ -85,3 +85,6 @@ export type CategoryInput = Omit<FinanceCategory, 'id' | 'created_at' | 'updated
 export const REVOLUT_BUDGET_KEY = 'revolut';
 export const MORTGAGE_KEY = 'apt_mortgage';
 export const APT_RENT_KEY = 'apt_income_rent';
+/** Aliquota IVA / accantonamento fiscale automatico sugli incassi fatturati (20%). */
+export const INVOICED_VAT_RATE = 0.2;
+export const AUTO_VAT_CATEGORY_ID = '__auto_vat_20__';

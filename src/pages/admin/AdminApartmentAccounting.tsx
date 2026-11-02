@@ -51,6 +51,7 @@ import {
   monthsBetween,
   summarizeApartments,
 } from '@/lib/finance-calc';
+import { AUTO_VAT_CATEGORY_ID } from '@/types/finance';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
 export const AdminApartmentAccounting: React.FC = () => {
@@ -107,21 +108,34 @@ export const AdminApartmentAccounting: React.FC = () => {
     [movements, tab, aptCount, summaryYear]
   );
   const yearTotals = yearRows.reduce(
-    (acc, r) => ({ income: acc.income + r.income, expenses: acc.expenses + r.expenses, net: acc.net + r.net }),
-    { income: 0, expenses: 0, net: 0 }
+    (acc, r) => ({
+      income: acc.income + r.income,
+      vatReserve: acc.vatReserve + r.vatReserve,
+      expenses: acc.expenses + r.expenses,
+      net: acc.net + r.net,
+    }),
+    { income: 0, vatReserve: 0, expenses: 0, net: 0 }
   );
 
   const expenseItems = useMemo(() => {
     const cats = (data?.categories ?? []).filter((c) => c.scope === 'apartment' && c.kind === 'expense');
-    return cats
+    const list = cats
       .map((c) => ({
         id: c.id,
         name: c.name,
         amount: summary.byCategory[c.id] ?? 0,
         hint: c.cat_group === 'fixed' ? 'fissa' : 'variabile',
       }))
-      .filter((i) => i.amount > 0)
-      .sort((a, b) => b.amount - a.amount);
+      .filter((i) => i.amount > 0);
+    if (summary.vatReserve > 0) {
+      list.push({
+        id: AUTO_VAT_CATEGORY_ID,
+        name: 'IVA / Tasse 20% su fatturato',
+        amount: summary.vatReserve,
+        hint: '20% automatico (spesa futura)',
+      });
+    }
+    return list.sort((a, b) => b.amount - a.amount);
   }, [data, summary]);
 
   const tabMovements = useMemo(
@@ -204,7 +218,13 @@ export const AdminApartmentAccounting: React.FC = () => {
       <section className="space-y-2">
         <SectionTitle icon={Wallet} title="Incassi" description="Incassi fatturati e incassi diretti sono tenuti distinti." />
         <div className="grid grid-cols-3 gap-2 sm:gap-3">
-          <KpiCard title="Fatturati" value={summary.invoiced} icon={FileCheck2} tone="emerald" />
+          <KpiCard
+            title="Fatturati"
+            value={summary.invoiced}
+            icon={FileCheck2}
+            tone="emerald"
+            hint={summary.vatReserve > 0 ? `IVA 20% da accantonare: ${eur.format(summary.vatReserve)}` : 'Quota soggetta a IVA 20%'}
+          />
           <KpiCard
             title="Diretti"
             value={summary.toInvoice}
@@ -223,29 +243,53 @@ export const AdminApartmentAccounting: React.FC = () => {
           title="Spese"
           description={
             tab === 'all'
-              ? 'Le spese condivise sono contate una sola volta.'
-              : `Comprende la quota (1/${aptCount}) delle spese condivise.`
+              ? 'Le spese condivise sono contate una sola volta. Include il 20% di IVA/tasse sul fatturato.'
+              : `Comprende la quota (1/${aptCount}) delle spese condivise e il 20% di IVA/tasse sul fatturato.`
           }
         />
-        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
           <KpiCard title="Spese fisse" value={summary.fixed} icon={Lock} tone="slate" hint="Mutuo, condominio, utenze" />
-          <KpiCard title="Variabili" value={summary.variable} icon={Shuffle} tone="violet" hint="Tasse, pulizie, manutenzione, varie" />
-          <KpiCard title="Totale spese" value={summary.expenses} icon={Receipt} tone="rose" highlight />
+          <KpiCard
+            title="Variabili (escl. IVA)"
+            value={Math.max(0, summary.variable - summary.vatReserve)}
+            icon={Shuffle}
+            tone="violet"
+            hint="Pulizie, manutenzione, varie"
+          />
+          <KpiCard
+            title="IVA 20% fatturato"
+            value={summary.vatReserve}
+            icon={Landmark}
+            tone="amber"
+            hint="Accantonata in automatico (spesa futura)"
+          />
+          <KpiCard
+            title="Totale spese"
+            value={summary.expenses}
+            icon={Receipt}
+            tone="rose"
+            highlight
+            hint={summary.vatReserve > 0 ? `Include ${eur.format(summary.vatReserve)} di IVA 20%` : undefined}
+          />
         </div>
       </section>
 
       {/* 1.3 Risultato */}
       <section className="space-y-2">
-        <SectionTitle icon={Scale} title="Risultato economico" description="Incassi totali − Spese totali" />
+        <SectionTitle icon={Scale} title="Risultato economico" description="Incassi totali − Spese totali (già al netto dell'IVA 20% sul fatturato)" />
         <div className="grid grid-cols-3 gap-2 sm:gap-3">
           <KpiCard
-            title="Netto cassa"
+            title="Netto reale (dopo IVA)"
             value={summary.net}
             icon={Scale}
             tone="primary"
             signed
             highlight
-            hint="Soldi entrati meno soldi usciti, rata del mutuo intera"
+            hint={
+              summary.vatReserve > 0
+                ? `In cassa oggi: ${eur.format(summary.cashNetBeforeVat)} − IVA 20% futura: ${eur.format(summary.vatReserve)}`
+                : 'Soldi entrati meno soldi usciti, rata del mutuo intera'
+            }
           />
           <KpiCard
             title="Redditività"
@@ -263,6 +307,19 @@ export const AdminApartmentAccounting: React.FC = () => {
             hint="Esce dalla cassa ma riduce il debito: non è un costo"
           />
         </div>
+        {summary.vatReserve > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-3.5 py-2.5 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <strong className="font-semibold">Promemoria liquidità vs IVA 20%:</strong> in banca vedi un saldo di cassa di{' '}
+              <strong className="font-bold">{eur.format(summary.cashNetBeforeVat)}</strong>, ma{' '}
+              <strong className="font-bold text-amber-800">{eur.format(summary.vatReserve)}</strong> (20% su{' '}
+              {eur.format(summary.invoiced)} fatturati) è una spesa futura da versare.
+            </div>
+            <div className="font-bold text-slate-900 bg-white/90 px-2.5 py-1 rounded-md border border-amber-200">
+              Netto realmente tuo: {eur.format(summary.net)}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Sotto-schede vista: Panoramica | Movimenti | Spese Fisse */}
@@ -306,7 +363,8 @@ export const AdminApartmentAccounting: React.FC = () => {
                       <th className="py-2.5 px-4 text-right">Fatturati</th>
                       <th className="py-2.5 px-4 text-right">Diretti</th>
                       <th className="py-2.5 px-4 text-right">Incassi</th>
-                      <th className="py-2.5 px-4 text-right">Spese</th>
+                      <th className="py-2.5 px-4 text-right">IVA 20%</th>
+                      <th className="py-2.5 px-4 text-right">Spese tot.</th>
                       <th className="py-2.5 px-4 text-right">Netto</th>
                     </tr>
                   </thead>
@@ -317,7 +375,8 @@ export const AdminApartmentAccounting: React.FC = () => {
                         <td data-label="Fatturati" className="py-2.5 px-4 text-right">{eur.format(s.invoiced)}</td>
                         <td data-label="Diretti" className="py-2.5 px-4 text-right text-amber-700">{eur.format(s.toInvoice)}</td>
                         <td data-label="Incassi" className="py-2.5 px-4 text-right font-semibold">{eur.format(s.income)}</td>
-                        <td data-label="Spese" className="py-2.5 px-4 text-right text-rose-600">{eur.format(s.expenses)}</td>
+                        <td data-label="IVA 20%" className="py-2.5 px-4 text-right text-amber-700">{eur.format(s.vatReserve)}</td>
+                        <td data-label="Spese tot." className="py-2.5 px-4 text-right text-rose-600">{eur.format(s.expenses)}</td>
                         <td data-label="Netto" className={`py-2.5 px-4 text-right font-bold ${s.net < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {eur.format(s.net)}
                         </td>
@@ -328,7 +387,8 @@ export const AdminApartmentAccounting: React.FC = () => {
                       <td data-label="Fatturati" className="py-2.5 px-4 text-right">{eur.format(summary.invoiced)}</td>
                       <td data-label="Diretti" className="py-2.5 px-4 text-right">{eur.format(summary.toInvoice)}</td>
                       <td data-label="Incassi" className="py-2.5 px-4 text-right">{eur.format(summary.income)}</td>
-                      <td data-label="Spese" className="py-2.5 px-4 text-right">{eur.format(summary.expenses)}</td>
+                      <td data-label="IVA 20%" className="py-2.5 px-4 text-right text-amber-700">{eur.format(summary.vatReserve)}</td>
+                      <td data-label="Spese tot." className="py-2.5 px-4 text-right">{eur.format(summary.expenses)}</td>
                       <td data-label="Netto" className={`py-2.5 px-4 text-right ${summary.net < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                         {eur.format(summary.net)}
                       </td>
@@ -393,7 +453,8 @@ export const AdminApartmentAccounting: React.FC = () => {
                   <tr>
                     <th className="py-2.5 px-4">Mese</th>
                     <th className="py-2.5 px-4 text-right">Incassi</th>
-                    <th className="py-2.5 px-4 text-right">Spese</th>
+                    <th className="py-2.5 px-4 text-right">di cui IVA 20%</th>
+                    <th className="py-2.5 px-4 text-right">Spese tot.</th>
                     <th className="py-2.5 px-4 text-right">Netto</th>
                   </tr>
                 </thead>
@@ -402,7 +463,8 @@ export const AdminApartmentAccounting: React.FC = () => {
                     <tr key={r.key} className="hover:bg-slate-50/80">
                       <td data-label="Mese" className="py-2 px-4 font-semibold text-slate-700">{monthLabel(r.key, true)}</td>
                       <td data-label="Incassi" className="py-2 px-4 text-right">{eur.format(r.income)}</td>
-                      <td data-label="Spese" className="py-2 px-4 text-right text-rose-600">{eur.format(r.expenses)}</td>
+                      <td data-label="di cui IVA 20%" className="py-2 px-4 text-right text-amber-700">{eur.format(r.vatReserve)}</td>
+                      <td data-label="Spese tot." className="py-2 px-4 text-right text-rose-600">{eur.format(r.expenses)}</td>
                       <td data-label="Netto" className={`py-2 px-4 text-right font-bold ${r.net < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                         {eur.format(r.net)}
                       </td>
@@ -411,7 +473,8 @@ export const AdminApartmentAccounting: React.FC = () => {
                   <tr className="bg-slate-50 font-bold">
                     <td data-label="Mese" className="py-2.5 px-4">Totale {summaryYear}</td>
                     <td data-label="Incassi" className="py-2.5 px-4 text-right">{eur.format(yearTotals.income)}</td>
-                    <td data-label="Spese" className="py-2.5 px-4 text-right">{eur.format(yearTotals.expenses)}</td>
+                    <td data-label="di cui IVA 20%" className="py-2.5 px-4 text-right text-amber-700">{eur.format(yearTotals.vatReserve)}</td>
+                    <td data-label="Spese tot." className="py-2.5 px-4 text-right">{eur.format(yearTotals.expenses)}</td>
                     <td data-label="Netto" className={`py-2.5 px-4 text-right ${yearTotals.net < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                       {eur.format(yearTotals.net)}
                     </td>

@@ -29,11 +29,13 @@ import {
   FinanceMovement,
   FinanceRecurring,
   FinanceScope,
+  INVOICED_VAT_RATE,
   MORTGAGE_KEY,
   MovementStatus,
 } from '@/types/finance';
 import { createMovement, createRecurring, updateMovement, updateRecurring } from '@/lib/finance-api';
 import { todayIso } from '@/lib/finance-calc';
+import { eur2 } from './finance-ui';
 
 export type EditTarget =
   | { type: 'movement'; item: FinanceMovement }
@@ -376,35 +378,45 @@ export const MovementDialog: React.FC<{
             </div>
           )}
 
-          {(showInvoice || fromMonthlyData) && (
-            <div className="space-y-1.5 rounded-lg border border-slate-200 p-3 bg-slate-50/60">
-              <Label className="text-xs font-semibold">Importo già fatturato (€)</Label>
-              <div className="flex gap-2">
-                <Input
-                  inputMode="decimal"
-                  placeholder="0"
-                  value={invoiced}
-                  onChange={(e) => setInvoiced(e.target.value)}
-                  className="h-9"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-9 text-xs shrink-0"
-                  onClick={() => setInvoiced(fromMonthlyData && editing?.type === 'movement' ? String(editing.item.amount) : amount)}
-                >
-                  Tutto
-                </Button>
-                <Button type="button" variant="outline" size="sm" className="h-9 text-xs shrink-0" onClick={() => setInvoiced('0')}>
-                  Niente
-                </Button>
+          {(showInvoice || fromMonthlyData) && (() => {
+            const invNum = Math.max(0, Number(invoiced.replace(',', '.')) || 0);
+            const vatPreview = Math.round(invNum * INVOICED_VAT_RATE * 100) / 100;
+            return (
+              <div className="space-y-1.5 rounded-lg border border-slate-200 p-3 bg-slate-50/60">
+                <Label className="text-xs font-semibold">Importo già fatturato (€)</Label>
+                <div className="flex gap-2">
+                  <Input
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={invoiced}
+                    onChange={(e) => setInvoiced(e.target.value)}
+                    className="h-9"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 text-xs shrink-0"
+                    onClick={() => setInvoiced(fromMonthlyData && editing?.type === 'movement' ? String(editing.item.amount) : amount)}
+                  >
+                    Tutto
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="h-9 text-xs shrink-0" onClick={() => setInvoiced('0')}>
+                    Niente
+                  </Button>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  La differenza viene conteggiata fra gli “incassi diretti”. Su quanto fatturi viene accantonato in automatico il <strong>20% di IVA/tasse</strong> tra le spese del mese.
+                </p>
+                {vatPreview > 0 && (
+                  <div className="rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900 flex items-center justify-between">
+                    <span>IVA / Tasse 20% accantonate come spesa:</span>
+                    <strong className="font-bold">− {eur2.format(vatPreview)}</strong>
+                  </div>
+                )}
               </div>
-              <p className="text-[11px] text-slate-500">
-                La differenza viene conteggiata fra gli “incassi diretti”.
-              </p>
-            </div>
-          )}
+            );
+          })()}
 
           {isMortgage && (
             <div className="space-y-1.5 rounded-lg border border-slate-200 p-3 bg-slate-50/60">

@@ -12,9 +12,11 @@
  *    sommato di nuovo agli incassi lordi.
  */
 import {
+  AUTO_VAT_CATEGORY_ID,
   FinanceCategory,
   FinanceMovement,
   FinanceRecurring,
+  INVOICED_VAT_RATE,
   MovementInput,
   MORTGAGE_KEY,
 } from '@/types/finance';
@@ -229,6 +231,16 @@ export function apartmentShare(m: FinanceMovement, aptId: string | 'all', aptCou
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Quota IVA / tasse (20%) maturata automaticamente su un incasso appartamento fatturato. */
+export function invoicedVatAmount(
+  m: Pick<FinanceMovement, 'scope' | 'direction' | 'amount' | 'invoiced_amount'>
+): number {
+  if (m.scope !== 'apartment' || m.direction !== 'income') return 0;
+  const amount = Math.max(0, Number(m.amount) || 0);
+  const invoiced = Math.min(Math.max(0, Number(m.invoiced_amount ?? 0) || 0), amount);
+  return round2(invoiced * INVOICED_VAT_RATE);
+}
+
 // ------------------------------------------------------------------------------
 // CONTABILITÀ APPARTAMENTI
 // ------------------------------------------------------------------------------
@@ -238,12 +250,16 @@ export interface ApartmentSummary {
   income: number;
   fixed: number;
   variable: number;
+  /** Accantonamento automatico IVA 20% sugli incassi fatturati (già incluso in variable ed expenses) */
+  vatReserve: number;
   expenses: number;
-  /** Flusso di cassa: incassi - tutte le uscite (rata mutuo intera) */
+  /** Flusso di cassa netto reale: incassi - tutte le uscite (incluso il 20% IVA su fatturato e rata mutuo intera) */
   net: number;
+  /** Liquidità in cassa prima di versare l'IVA 20% (net + vatReserve) */
+  cashNetBeforeVat: number;
   /** Quota capitale delle rate di mutuo (riduce il debito, non è un costo) */
   mortgageCapital: number;
-  /** Redditività economica: incassi - costi, considerando del mutuo solo gli interessi */
+  /** Redditività economica: incassi - costi (inclusa IVA 20%), considerando del mutuo solo gli interessi */
   economicNet: number;
   byCategory: Record<string, number>;
 }
@@ -256,8 +272,8 @@ export function summarizeApartments(
   period: Period
 ): ApartmentSummary {
   const s: ApartmentSummary = {
-    invoiced: 0, toInvoice: 0, income: 0, fixed: 0, variable: 0, expenses: 0,
-    net: 0, mortgageCapital: 0, economicNet: 0, byCategory: {},
+    invoiced: 0, toInvoice: 0, income: 0, fixed: 0, variable: 0, vatReserve: 0, expenses: 0,
+    net: 0, cashNetBeforeVat: 0, mortgageCapital: 0, economicNet: 0, byCategory: {},
   };
   for (const m of movements) {
     if (m.scope !== 'apartment' || !isCounted(m) || !inPeriod(m.movement_date, period)) continue;
@@ -268,10 +284,17 @@ export function summarizeApartments(
     if (m.category_id) s.byCategory[m.category_id] = (s.byCategory[m.category_id] ?? 0) + amount;
 
     if (m.direction === 'income') {
-      const invoiced = Math.min(Number(m.invoiced_amount ?? 0), Number(m.amount)) * share;
+      const invoiced = Math.min(Math.max(0, Number(m.invoiced_amount ?? 0)), Number(m.amount)) * share;
+      const vat = invoiced * INVOICED_VAT_RATE;
       s.invoiced += invoiced;
       s.toInvoice += amount - invoiced;
       s.income += amount;
+      if (vat > 0) {
+        s.vatReserve += vat;
+        s.variable += vat;
+        s.expenses += vat;
+        s.byCategory[AUTO_VAT_CATEGORY_ID] = (s.byCategory[AUTO_VAT_CATEGORY_ID] ?? 0) + vat;
+      }
     } else {
       if (cat?.cat_group === 'fixed') s.fixed += amount;
       else s.variable += amount;
@@ -282,6 +305,7 @@ export function summarizeApartments(
     }
   }
   s.net = s.income - s.expenses;
+  s.cashNetBeforeVat = s.net + s.vatReserve;
   s.economicNet = s.net + s.mortgageCapital;
   for (const k of Object.keys(s) as (keyof ApartmentSummary)[]) {
     const v = s[k];
@@ -361,6 +385,7 @@ export interface MonthRow {
   key: string;
   label: string;
   aptIncome: number;
+  aptVatReserve: number;
   aptExpenses: number;
   aptNet: number;
   personalIncome: number;
@@ -383,7 +408,7 @@ export function monthlyRows(
   const byMonth = new Map<string, MonthRow>();
   for (const key of months) {
     byMonth.set(key, {
-      key, label: monthLabel(key), aptIncome: 0, aptExpenses: 0, aptNet: 0,
+      key, label: monthLabel(key), aptIncome: 0, aptVatReserve: 0, aptExpenses: 0, aptNet: 0,
       personalIncome: 0, personalExpenses: 0, income: 0, expenses: 0, net: 0, cumulative: 0,
     });
   }
@@ -393,8 +418,14 @@ export function monthlyRows(
     if (!row) continue;
     const amount = Number(m.amount);
     if (m.scope === 'apartment') {
-      if (m.direction === 'income') row.aptIncome += amount;
-      else row.aptExpenses += amount;
+      if (m.direction === 'income') {
+        const vat = invoicedVatAmount(m);
+        row.aptIncome += amount;
+        row.aptVatReserve += vat;
+        row.aptExpenses += vat;
+      } else {
+        row.aptExpenses += amount;
+      }
     } else {
       if (m.direction === 'income') row.personalIncome += amount;
       else row.personalExpenses += amount;
@@ -410,6 +441,7 @@ export function monthlyRows(
     cum += r.net;
     r.cumulative = round2(cum);
     r.aptIncome = round2(r.aptIncome);
+    r.aptVatReserve = round2(r.aptVatReserve);
     r.aptExpenses = round2(r.aptExpenses);
     r.personalIncome = round2(r.personalIncome);
     r.personalExpenses = round2(r.personalExpenses);
@@ -423,19 +455,32 @@ export function apartmentMonthlyRows(
   aptId: string | 'all',
   aptCount: number,
   months: string[]
-): { key: string; label: string; income: number; expenses: number; net: number }[] {
-  const map = new Map(months.map((k) => [k, { key: k, label: monthLabel(k), income: 0, expenses: 0, net: 0 }]));
+): { key: string; label: string; income: number; vatReserve: number; expenses: number; net: number }[] {
+  const map = new Map(months.map((k) => [k, { key: k, label: monthLabel(k), income: 0, vatReserve: 0, expenses: 0, net: 0 }]));
   for (const m of movements) {
     if (m.scope !== 'apartment' || !isCounted(m)) continue;
     const row = map.get(monthKey(m.movement_date));
     if (!row) continue;
-    const amount = Number(m.amount) * apartmentShare(m, aptId, aptCount);
-    if (m.direction === 'income') row.income += amount;
-    else row.expenses += amount;
+    const share = apartmentShare(m, aptId, aptCount);
+    const amount = Number(m.amount) * share;
+    if (m.direction === 'income') {
+      const vat = invoicedVatAmount(m) * share;
+      row.income += amount;
+      row.vatReserve += vat;
+      row.expenses += vat;
+    } else {
+      row.expenses += amount;
+    }
   }
   return months.map((k) => {
     const r = map.get(k)!;
-    return { ...r, income: round2(r.income), expenses: round2(r.expenses), net: round2(r.income - r.expenses) };
+    return {
+      ...r,
+      income: round2(r.income),
+      vatReserve: round2(r.vatReserve),
+      expenses: round2(r.expenses),
+      net: round2(r.income - r.expenses),
+    };
   });
 }
 

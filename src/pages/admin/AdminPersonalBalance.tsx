@@ -54,6 +54,7 @@ import {
   actualOnly,
   addMonths,
   forecastMovements,
+  invoicedVatAmount,
   monthEnd,
   monthKey,
   monthLabel,
@@ -117,7 +118,10 @@ export const AdminPersonalBalance: React.FC = () => {
     const start = `${chartMonths[0]}-01`;
     return actual
       .filter((m) => m.movement_date < start && m.direction !== 'transfer')
-      .reduce((acc, m) => acc + (m.direction === 'income' ? Number(m.amount) : -Number(m.amount)), 0);
+      .reduce(
+        (acc, m) => acc + (m.direction === 'income' ? Number(m.amount) - invoicedVatAmount(m) : -Number(m.amount)),
+        0
+      );
   }, [actual, chartMonths]);
 
   const rows = useMemo(
@@ -237,31 +241,58 @@ export const AdminPersonalBalance: React.FC = () => {
         </div>
         <SectionTitle icon={TrendingDown} title="Uscite" />
         <div className="grid grid-cols-3 gap-2 sm:gap-3">
-          <KpiCard title="Appartamenti" value={apt.expenses} icon={Building2} tone="slate" hint="Da Contabilità Appartamenti" />
+          <KpiCard
+            title="Appartamenti"
+            value={apt.expenses}
+            icon={Building2}
+            tone="slate"
+            hint={apt.vatReserve > 0 ? `Include ${eur.format(apt.vatReserve)} di IVA 20% su fatturato` : 'Da Contabilità Appartamenti'}
+          />
           <KpiCard title="Personali" value={per.expenses} icon={User} tone="violet" hint="Da Finanze Personali" />
-          <KpiCard title="Totale uscite" value={totalExpenses} icon={Receipt} tone="rose" highlight />
+          <KpiCard
+            title="Totale uscite"
+            value={totalExpenses}
+            icon={Receipt}
+            tone="rose"
+            highlight
+            hint={apt.vatReserve > 0 ? `Include IVA 20% futura (${eur.format(apt.vatReserve)})` : undefined}
+          />
         </div>
       </section>
 
       <Card className="border-primary/30 bg-primary/[0.03] shadow-sm">
-        <CardContent className="p-3.5 sm:p-5 grid grid-cols-3 md:grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-2 sm:gap-4 text-center">
-          <div>
-            <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500">Utile alloggi</div>
-            <div className={`text-base sm:text-xl font-bold ${apt.net < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{eur.format(apt.net)}</div>
-            <div className="text-[10px] sm:text-[11px] text-slate-500 hidden sm:block">quanto produce l’attività</div>
+        <CardContent className="p-3.5 sm:p-5 space-y-3">
+          <div className="grid grid-cols-3 md:grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-2 sm:gap-4 text-center">
+            <div>
+              <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500">Utile alloggi (netto IVA)</div>
+              <div className={`text-base sm:text-xl font-bold ${apt.net < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{eur.format(apt.net)}</div>
+              <div className="text-[10px] sm:text-[11px] text-slate-500 hidden sm:block">
+                {apt.vatReserve > 0 ? `cassa ${eur.format(apt.cashNetBeforeVat)} − IVA 20% ${eur.format(apt.vatReserve)}` : 'quanto produce l’attività'}
+              </div>
+            </div>
+            <div className="text-lg sm:text-xl text-slate-400 font-bold hidden md:block">+</div>
+            <div>
+              <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500">Saldo pers.</div>
+              <div className={`text-base sm:text-xl font-bold ${per.balance < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{eur.format(per.balance)}</div>
+              <div className="text-[10px] sm:text-[11px] text-slate-500 hidden sm:block">entrate − spese personali</div>
+            </div>
+            <div className="text-lg sm:text-xl text-slate-400 font-bold hidden md:block">=</div>
+            <div>
+              <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-primary">Saldo netto reale</div>
+              <div className={`text-lg sm:text-3xl font-black ${totalNet < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{eur.format(totalNet)}</div>
+              <div className="text-[10px] sm:text-[11px] text-slate-500 hidden sm:block">già al netto del 20% IVA futura</div>
+            </div>
           </div>
-          <div className="text-lg sm:text-xl text-slate-400 font-bold hidden md:block">+</div>
-          <div>
-            <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-slate-500">Saldo pers.</div>
-            <div className={`text-base sm:text-xl font-bold ${per.balance < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{eur.format(per.balance)}</div>
-            <div className="text-[10px] sm:text-[11px] text-slate-500 hidden sm:block">entrate − spese personali</div>
-          </div>
-          <div className="text-lg sm:text-xl text-slate-400 font-bold hidden md:block">=</div>
-          <div>
-            <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-primary">Saldo netto</div>
-            <div className={`text-lg sm:text-3xl font-black ${totalNet < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{eur.format(totalNet)}</div>
-            <div className="text-[10px] sm:text-[11px] text-slate-500 hidden sm:block">quanto rimane dopo tutte le uscite</div>
-          </div>
+          {apt.vatReserve > 0 && (
+            <div className="rounded-lg border border-amber-200/90 bg-amber-50/80 px-3 py-2 text-[11px] sm:text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                💡 <strong>Liquidità apparente prima dell’IVA:</strong>{' '}
+                <strong>{eur.format(totalNet + apt.vatReserve)}</strong> — di cui{' '}
+                <strong className="text-amber-800">{eur.format(apt.vatReserve)}</strong> sono accantonati per l’IVA al 20% sugli incassi fatturati ({eur.format(apt.invoiced)}).
+              </span>
+              <span className="font-bold text-slate-900">Disponibile reale: {eur.format(totalNet)}</span>
+            </div>
+          )}
         </CardContent>
       </Card>
 

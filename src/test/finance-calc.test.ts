@@ -131,29 +131,34 @@ describe('contabilità appartamenti', () => {
     mv({ category_id: 'clean', apartment_id: A, amount: 999, movement_date: '2026-06-01' }),
   ];
 
-  it('separa fatturato e da fatturare', () => {
+  it('separa fatturato e da fatturare e calcola il 20% di IVA solo sul fatturato', () => {
     const s = summarizeApartments(data, cats, 'all', 3, MAY);
     expect(s.invoiced).toBe(1100);
     expect(s.toInvoice).toBe(400);
     expect(s.income).toBe(1500);
+    expect(s.vatReserve).toBe(220); // 20% di 1100 (600 su A + 500 su B)
   });
 
-  it('la spesa condivisa conta una volta nel totale e 1/3 per appartamento', () => {
+  it('la spesa condivisa conta una volta nel totale e 1/3 per appartamento, includendo IVA 20% su fatturato', () => {
     const total = summarizeApartments(data, cats, 'all', 3, MAY);
-    expect(total.expenses).toBe(700);
+    // Spese esplicite: 400 (mutuo A) + 300 (clean condivisa) = 700 + 220 (IVA 20% su 1100 fatturati) = 920
+    expect(total.expenses).toBe(920);
     const parts = [A, B, C].map((id) => summarizeApartments(data, cats, id, 3, MAY).expenses);
-    expect(parts[0]).toBe(500);
-    expect(parts[1]).toBe(100);
+    expect(parts[0]).toBe(620); // 400 mutuo + 100 clean (1/3) + 120 IVA (20% di 600)
+    expect(parts[1]).toBe(200); // 100 clean (1/3) + 100 IVA (20% di 500)
+    expect(parts[2]).toBe(100); // 100 clean (1/3) + 0 IVA
     expect(parts.reduce((a, b) => a + b, 0)).toBeCloseTo(total.expenses, 2);
   });
 
-  it('distingue cassa e redditività per il mutuo', () => {
+  it('distingue cassa, IVA 20% futura e redditività per il mutuo', () => {
     const s = summarizeApartments(data, cats, A, 3, MAY);
     expect(s.fixed).toBe(400);
-    expect(s.variable).toBe(100);
-    expect(s.net).toBe(500); // 1000 - 400 - 100
+    expect(s.vatReserve).toBe(120); // 20% di 600 fatturati
+    expect(s.variable).toBe(220); // 100 (1/3 clean) + 120 IVA 20%
+    expect(s.cashNetBeforeVat).toBe(500); // 1000 - 400 - 100 (liquidità prima di pagare l'IVA)
+    expect(s.net).toBe(380); // 1000 - 400 - 100 - 120 IVA
     expect(s.mortgageCapital).toBe(300);
-    expect(s.economicNet).toBe(800);
+    expect(s.economicNet).toBe(680); // 380 + 300 capitale mutuo
   });
 
   it('apartmentShare', () => {
@@ -190,16 +195,17 @@ describe('finanze personali e bilancio', () => {
     expect(budgetFor(b, 'revolut', '2026-08')).toBe(1200);
   });
 
-  it('saldo complessivo = risultato appartamenti + saldo personale, senza doppio conteggio', () => {
+  it('saldo complessivo = risultato appartamenti (al netto di IVA 20% su fatturato) + saldo personale, senza doppio conteggio', () => {
     const all = [
       ...data,
-      mv({ direction: 'income', category_id: 'rent', apartment_id: 'a1', amount: 1000 }),
+      mv({ direction: 'income', category_id: 'rent', apartment_id: 'a1', amount: 1000, invoiced_amount: 600 }),
       mv({ category_id: 'clean', apartment_id: 'a1', amount: 300 }),
     ];
     const [row] = monthlyRows(all, ['2026-05']);
     expect(row.income).toBe(3500);
-    expect(row.expenses).toBe(1820);
-    expect(row.aptNet).toBe(700);
-    expect(row.net).toBe(700 + 980);
+    expect(row.aptVatReserve).toBe(120); // 20% di 600 fatturati
+    expect(row.expenses).toBe(1940); // 1520 personali + 300 clean + 120 IVA 20%
+    expect(row.aptNet).toBe(580); // 1000 - 300 - 120 IVA
+    expect(row.net).toBe(580 + 980);
   });
 });
